@@ -800,9 +800,6 @@ function writeTraceNode(
     } else if (trace.isExcluded) {
         sheet.getRange(`A${row}:${lastCol}${row}`).getFormat().getFill().setColor("#F0F0F0"); // Light gray
         sheet.getRange(`D${row}`).getFormat().getFont().setItalic(true);
-    } else if (trace.isLeaf) {
-        sheet.getRange(`A${row}:${lastCol}${row}`).getFormat().getFill().setColor("#E8E0F0"); // Light purple
-        sheet.getRange(`D${row}`).getFormat().getFont().setItalic(true);
     } else if (trace.isRangeTooLarge) {
         sheet.getRange(`A${row}:${lastCol}${row}`).getFormat().getFill().setColor("#FFF9E5"); // Light yellow
         sheet.getRange(`D${row}`).getFormat().getFont().setItalic(true);
