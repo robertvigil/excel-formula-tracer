@@ -733,6 +733,7 @@ function writeTraceToSheet(
 
     // Auto-fit columns
     sheet.getRange("A:G").getFormat().autofitColumns();
+    sheet.getFreezePanes().freezeRows(1)
 }
 
 /**
