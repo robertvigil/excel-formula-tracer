@@ -8,8 +8,9 @@ const MAX_TRACE_DEPTH = 5;
 // If a range expands to more cells than this limit, it will not be traced
 const RANGE_EXPANSION_LIMIT = 15;
 
-// Trace Config tab name — contains the whitelist of cells to trace (Column A) and optional comments (Column B)
+// Trace Config tab name — contains the whitelist of cells to trace (Column A), optional comments (Column B), and leaf flag (Column C)
 // Column A serves as both the trace whitelist and the cell reference key for comment lookups
+// Column C "Leaf" flag: any non-empty value means the cell appears in output but its precedents are not traced
 // A2 is always the root cell for the trace; all entries in Column A define the scope of tracing
 // If the tab doesn't exist, it will be created automatically with the active cell as A2
 const CONFIG_TAB = "Trace Config";
@@ -30,14 +31,15 @@ const CONFIG_TAB = "Trace Config";
  *    - All entries in Column A define the whitelist (scope of tracing)
  *    - Supports individual cells ('Sheet1'!A1) and ranges ('Sheet1'!A1:A10)
  * 3. Column B is for optional comments — only applies to single cell references, not ranges
- * 4. Run the script again to generate the trace
+ * 4. Column C "Leaf" — put any value (e.g., "x") to show the cell but skip tracing its precedents
+ * 5. Run the script again to generate the trace
  *
  * OUTPUT FORMAT:
  * The script creates a "Formula Trace" sheet with 7 columns:
  * - Level: Depth in the dependency tree (0 = root cell)
  * - Sheet: Sheet name where the cell is located
  * - Cell: Cell address with indentation showing hierarchy
- * - Status: Indicators: [already traced above], [max depth reached], [not in scope], [range limit exceeded]
+ * - Status: Indicators: [already traced above], [max depth reached], [not in scope], [leaf], [range limit exceeded]
  * - Formula: The formula text (displayed as-is, not executed)
  * - Value: Current cell value (preserves numeric formatting from source)
  * - Comments: Lookup formula fetching comments from the Trace Config tab
@@ -48,6 +50,8 @@ const CONFIG_TAB = "Trace Config";
  * - Whitelist-based tracing: Only cells listed in Trace Config Column A are followed
  *   - Cells not in the whitelist appear in output as "[not in scope]" but aren't traced further
  *   - Supports individual cells and ranges (e.g., 'Sheet Name'!E73:E85)
+ * - Leaf cells: Column C "Leaf" flag marks cells that appear in output but whose precedents are skipped
+ *   - Useful for reducing noise when you don't need to trace certain branches deeper
  * - Handles ranges: Expands ranges like P17:P19 into individual cells (P17, P18, P19)
  * - Range expansion limit: Configurable RANGE_EXPANSION_LIMIT to prevent tracing huge ranges
  *   - Shows "[range limit exceeded]" status and the number of cells in the range
@@ -85,6 +89,7 @@ interface CellTrace {
     isCircularRef: boolean;
     maxDepthReached: boolean;
     isExcluded: boolean;
+    isLeaf: boolean;           // True if this cell is marked as "Leaf" in Trace Config (don't trace its precedents)
     isRangeTooLarge: boolean;  // True if this represents a range that exceeded RANGE_EXPANSION_LIMIT
     numberFormat: string;
 }
@@ -175,6 +180,42 @@ function readColumnFromConfigTab(workbook: ExcelScript.Workbook, column: string)
     return result;
 }
 
+/**
+ * Reads cell references from Column A where Column C (Leaf) has a non-empty value
+ * Returns the list of cell references that should not have their precedents traced
+ */
+function readLeafCellsFromConfigTab(workbook: ExcelScript.Workbook): string[] {
+    const configSheet = workbook.getWorksheet(CONFIG_TAB);
+    if (!configSheet) {
+        return [];
+    }
+
+    const usedRange = configSheet.getUsedRange();
+    if (!usedRange) {
+        return [];
+    }
+
+    const lastRow = usedRange.getRowCount();
+    if (lastRow <= 1) {
+        return [];
+    }
+
+    // Read Columns A and C together from row 2 to the last used row
+    const cellRefs = configSheet.getRange(`A2:A${lastRow}`).getValues();
+    const leafFlags = configSheet.getRange(`C2:C${lastRow}`).getValues();
+
+    const result: string[] = [];
+    for (let i = 0; i < cellRefs.length; i++) {
+        const cellRef = cellRefs[i][0];
+        const leafFlag = leafFlags[i][0];
+        if (cellRef && String(cellRef).trim() !== "" &&
+            leafFlag !== null && leafFlag !== undefined && String(leafFlag).trim() !== "") {
+            result.push(String(cellRef).trim());
+        }
+    }
+    return result;
+}
+
 async function main(workbook: ExcelScript.Workbook) {
     // Check if Trace Config tab exists; if not, create it with the active cell as root
     let configSheet = workbook.getWorksheet(CONFIG_TAB);
@@ -192,8 +233,9 @@ async function main(workbook: ExcelScript.Workbook) {
         configSheet = workbook.addWorksheet(CONFIG_TAB);
         configSheet.getRange("A1").setValue("Cell");
         configSheet.getRange("B1").setValue("Comment");
+        configSheet.getRange("C1").setValue("Leaf");
 
-        const headerRange = configSheet.getRange("A1:B1");
+        const headerRange = configSheet.getRange("A1:C1");
         headerRange.getFormat().getFill().setColor("#4472C4");
         headerRange.getFormat().getFont().setColor("white");
         headerRange.getFormat().getFont().setBold(true);
@@ -209,7 +251,7 @@ async function main(workbook: ExcelScript.Workbook) {
         // Prefix with '' so Excel preserves the leading quote (Excel treats a single leading ' as a text indicator and strips it)
         configSheet.getRange("A2").setValue(`''${sheetName}'!${cellPart}`);
 
-        configSheet.getRange("A:B").getFormat().autofitColumns();
+        configSheet.getRange("A:C").getFormat().autofitColumns();
         configSheet.activate();
         return; // Let the user populate the whitelist before running again
     }
@@ -270,11 +312,12 @@ async function main(workbook: ExcelScript.Workbook) {
 
     const rootCell = rootSheet.getRange(rootAddress);
 
-    // Read whitelist from Column A of Trace Config
+    // Read whitelist from Column A and leaf flags from Column C of Trace Config
     const whitelist = readColumnFromConfigTab(workbook, "A");
+    const leafCells = readLeafCellsFromConfigTab(workbook);
 
     // Build the trace tree
-    const traceTree = buildTraceTree(rootCell, rootSheet, 0, new Set(), workbook, whitelist);
+    const traceTree = buildTraceTree(rootCell, rootSheet, 0, new Set(), workbook, whitelist, leafCells);
 
     // Create or get the trace output sheet
     let traceSheet = workbook.getWorksheet("Formula Trace");
@@ -300,7 +343,8 @@ function buildTraceTree(
     level: number,
     visited: Set<string> = new Set(),
     workbook?: ExcelScript.Workbook,
-    whitelist: string[] = []
+    whitelist: string[] = [],
+    leafCells: string[] = []
 ): CellTrace {
     const addressRaw = cell.getAddress();
     const sheetName = sheet.getName();
@@ -332,6 +376,7 @@ function buildTraceTree(
         isCircularRef: false,
         maxDepthReached: false,
         isExcluded: false,
+        isLeaf: false,
         isRangeTooLarge: false,
         numberFormat: numberFormat
     };
@@ -343,6 +388,12 @@ function buildTraceTree(
             trace.isExcluded = true;
             return trace;
         }
+    }
+
+    // Check if this cell is marked as a leaf (don't trace its precedents)
+    if (leafCells.length > 0 && cellMatchesList(normalizedFullAddress, leafCells)) {
+        trace.isLeaf = true;
+        return trace;
     }
 
     // Prevent circular references using full sheet!address
@@ -381,6 +432,7 @@ function buildTraceTree(
                         isCircularRef: false,
                         maxDepthReached: false,
                         isExcluded: false,
+                        isLeaf: false,
                         isRangeTooLarge: true,
                         numberFormat: ""
                     };
@@ -397,7 +449,8 @@ function buildTraceTree(
                             level + 1,
                             new Set(visited), // Pass a copy to avoid shared state across branches
                             workbook,
-                            whitelist
+                            whitelist,
+                            leafCells
                         );
                         trace.precedents.push(precedentTrace);
                     } else {
@@ -714,6 +767,8 @@ function writeTraceNode(
         statusText = "[max depth reached]";
     } else if (trace.isExcluded) {
         statusText = "[not in scope]";
+    } else if (trace.isLeaf) {
+        statusText = "[leaf]";
     } else if (trace.isRangeTooLarge) {
         statusText = "[range limit exceeded]";
     }
@@ -745,6 +800,9 @@ function writeTraceNode(
     } else if (trace.isExcluded) {
         sheet.getRange(`A${row}:${lastCol}${row}`).getFormat().getFill().setColor("#F0F0F0"); // Light gray
         sheet.getRange(`D${row}`).getFormat().getFont().setItalic(true);
+    } else if (trace.isLeaf) {
+        sheet.getRange(`A${row}:${lastCol}${row}`).getFormat().getFill().setColor("#E8E0F0"); // Light purple
+        sheet.getRange(`D${row}`).getFormat().getFont().setItalic(true);
     } else if (trace.isRangeTooLarge) {
         sheet.getRange(`A${row}:${lastCol}${row}`).getFormat().getFill().setColor("#FFF9E5"); // Light yellow
         sheet.getRange(`D${row}`).getFormat().getFont().setItalic(true);
@@ -756,8 +814,8 @@ function writeTraceNode(
 
     row++;
 
-    // Write precedents (children) - skip if circular reference, max depth reached, excluded, or range limit exceeded
-    if (!trace.isCircularRef && !trace.maxDepthReached && !trace.isExcluded && !trace.isRangeTooLarge) {
+    // Write precedents (children) - skip if circular reference, max depth reached, excluded, leaf, or range limit exceeded
+    if (!trace.isCircularRef && !trace.maxDepthReached && !trace.isExcluded && !trace.isLeaf && !trace.isRangeTooLarge) {
         for (let i = 0; i < trace.precedents.length; i++) {
             const precedent = trace.precedents[i];
             row = writeTraceNode(sheet, precedent, row, indent);
