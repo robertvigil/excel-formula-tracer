@@ -733,6 +733,9 @@ function writeTraceToSheet(
 
     // Auto-fit columns
     sheet.getRange("A:G").getFormat().autofitColumns();
+
+    // Freeze the header row so it stays visible when scrolling
+    sheet.getFreezePanes().freezeRows(1);
 }
 
 /**
