@@ -8,76 +8,64 @@ const MAX_TRACE_DEPTH = 5;
 // If a range expands to more cells than this limit, it will not be traced
 const RANGE_EXPANSION_LIMIT = 15;
 
-// Hide excluded cells from the output (cells filtered by "Include In Trace" / "Exclude From Trace" in Comments tab)
-// When true, excluded cells are omitted entirely from the trace output
-// When false, excluded cells are shown with "[not followed]" status
-const HIDE_EXCLUDED_CELLS = true;
-
-// Comments tab name (optional)
-// If specified, creates a "Comments" column with lookup formulas to fetch comments from the specified sheet
-// The comments sheet has: Cell (A), Comment (B), Include In Trace (C), Exclude From Trace (D)
-// If the sheet doesn't exist, it will be automatically created with proper headers
-const COMMENTS_TAB = "Comments";  // Example: "Comments" or leave as "" to disable
+// Trace Config tab name — contains the whitelist of cells to trace (Column A) and optional comments (Column B)
+// Column A serves as both the trace whitelist and the cell reference key for comment lookups
+// A2 is always the root cell for the trace; all entries in Column A define the scope of tracing
+// If the tab doesn't exist, it will be created automatically with the active cell as A2
+const CONFIG_TAB = "Trace Config";
 
 /**
  * Excel Office Script: Trace Formula Precedents
  *
  * PURPOSE:
- * This script analyzes the active cell and traces all precedent cells (dependencies)
- * to show how the cell's value is calculated. It displays a hierarchical tree showing
- * the complete dependency chain with formulas and values.
+ * This script traces all precedent cells (dependencies) for a specified root cell,
+ * showing how the cell's value is calculated. It displays a hierarchical tree showing
+ * the dependency chain with formulas and values, scoped to a user-defined whitelist.
  *
  * HOW TO USE:
- * 1. Select a cell in Excel (preferably one with a formula)
- * 2. Run this script from Automate > Scripts
- * 3. A new sheet named "Formula Trace" will be created with the dependency tree
+ * 1. Run the script — if "Trace Config" tab doesn't exist, it's created with the
+ *    active cell as the root cell (A2) and you can populate the whitelist
+ * 2. In the "Trace Config" tab, Column A lists cells/ranges to include in the trace:
+ *    - A2 is always the root cell (starting point for the trace)
+ *    - All entries in Column A define the whitelist (scope of tracing)
+ *    - Supports individual cells ('Sheet1'!A1) and ranges ('Sheet1'!A1:A10)
+ * 3. Column B is for optional comments — only applies to single cell references, not ranges
+ * 4. Run the script again to generate the trace
  *
  * OUTPUT FORMAT:
- * The script creates a new sheet with 6 columns (or 7 if COMMENTS_TAB is configured):
+ * The script creates a "Formula Trace" sheet with 7 columns:
  * - Level: Depth in the dependency tree (0 = root cell)
  * - Sheet: Sheet name where the cell is located
- * - Cell: Cell address with indentation showing hierarchy (clean, for easy copy/goto)
- * - Status: Status indicators (circular ref, max depth, not followed, etc.)
- * - Formula: The formula text (empty if no formula)
+ * - Cell: Cell address with indentation showing hierarchy
+ * - Status: Indicators: [already traced above], [max depth reached], [not in scope], [range limit exceeded]
+ * - Formula: The formula text (displayed as-is, not executed)
  * - Value: Current cell value (preserves numeric formatting from source)
- * - Comments: (Optional) Lookup formula to fetch comments from configured comments sheet
+ * - Comments: Lookup formula fetching comments from the Trace Config tab
  *
  * Each level is color-coded for easy visual navigation.
  *
  * FEATURES:
+ * - Whitelist-based tracing: Only cells listed in Trace Config Column A are followed
+ *   - Cells not in the whitelist appear in output as "[not in scope]" but aren't traced further
+ *   - Supports individual cells and ranges (e.g., 'Sheet Name'!E73:E85)
  * - Handles ranges: Expands ranges like P17:P19 into individual cells (P17, P18, P19)
  * - Range expansion limit: Configurable RANGE_EXPANSION_LIMIT to prevent tracing huge ranges
- *   - If a range expands to more cells than the limit, it's shown as collapsed range notation
  *   - Shows "[range limit exceeded]" status and the number of cells in the range
- *   - Highlights range-limited cells with light yellow background and italic text
- *   - Prevents performance issues when formulas reference very large ranges (e.g., A1:Z1000)
- *   - Default limit is 20 cells, configurable via RANGE_EXPANSION_LIMIT constant
  * - Cross-sheet support: Follows references like Sheet2!A1 or Sheet2!H13:J13
- * - Recursive tracing: Follows dependencies multiple levels deep
- * - Circular reference detection: Gracefully handles circular refs with visual indicators
- *   - Shows "[already traced above]" for previously visited cells
- *   - Highlights circular refs with light red background and italic text
- * - Cell filtering via Comments tab: "Include In Trace" (column C) and "Exclude From Trace" (column D)
- *   - "Include In Trace": whitelist — only cells matching this list will be traced (all others skipped)
- *   - "Exclude From Trace": blacklist — cells matching this list are shown but not traced further
- *   - Both support individual cells (Sheet1!A1, 'Sheet Name'!A1) and ranges ('Sheet Name'!E73:E85)
- *   - Include takes precedence: cell must be in Include and not in Exclude
- *   - Root cell (level 0) is always traced regardless of filters
- *   - Excluded cells shown with "[not followed]" status and light gray background (unless HIDE_EXCLUDED_CELLS is true)
- * - Comments integration: Optional COMMENTS_TAB config to add a Comments column
- *   - Automatically creates lookup formulas to fetch comments for each cell
- *   - Comments sheet has: Cell (A), Comment (B), Include In Trace (C), Exclude From Trace (D)
- *   - If comments sheet doesn't exist, it will be created automatically with headers
+ * - Recursive tracing: Follows dependencies up to MAX_TRACE_DEPTH levels deep
+ * - Circular reference detection: Marks already-visited cells with "[already traced above]"
+ * - Comments integration: Column B of Trace Config provides optional annotations per cell
+ *   - Comments on range entries are disregarded (only single cell references get comments)
+ * - Preserves formatting: Numeric formats from source cells carry over to the trace output
+ * - Color-coded output: Each depth level gets a distinct background color
  * - Formula display: Shows formulas as text (not executed)
  * - Clean indentation: Uses 2 spaces per level for hierarchy
  * - Function-agnostic: Traces any formula (SUM, AVERAGE, VLOOKUP, etc.)
- * - Console logging: Debug output shows what's being traced (useful for troubleshooting)
  *
  * LIMITATIONS:
- * - Uses regex for cell detection - may not catch all complex formulas
+ * - Uses regex for cell detection — may not catch all complex formulas
  * - Does not handle named ranges or structured references (e.g., Table1[Column])
  * - Does not handle external workbook references (e.g., [Book1]Sheet1!A1)
- * - Notes/comments are not included due to Office Scripts type restrictions
  *
  * EXAMPLE:
  * If cell D10 contains =AVERAGE(Sheet2!P17:P19) and Sheet2!P17 contains =A1*2, the trace shows:
@@ -151,15 +139,15 @@ function cellMatchesList(normalizedFullAddress: string, cellList: string[]): boo
 }
 
 /**
- * Reads non-empty string values from a column in the Comments tab (skipping the header row)
+ * Reads non-empty string values from a column in the Trace Config tab (skipping the header row)
  */
-function readColumnFromCommentsTab(workbook: ExcelScript.Workbook, column: string): string[] {
-    const commentsSheet = workbook.getWorksheet(COMMENTS_TAB);
-    if (!commentsSheet) {
+function readColumnFromConfigTab(workbook: ExcelScript.Workbook, column: string): string[] {
+    const configSheet = workbook.getWorksheet(CONFIG_TAB);
+    if (!configSheet) {
         return [];
     }
 
-    const usedRange = commentsSheet.getUsedRange();
+    const usedRange = configSheet.getUsedRange();
     if (!usedRange) {
         return [];
     }
@@ -170,7 +158,7 @@ function readColumnFromCommentsTab(workbook: ExcelScript.Workbook, column: strin
     }
 
     // Read from row 2 (skip header) to the last used row
-    const dataRange = commentsSheet.getRange(`${column}2:${column}${lastRow}`);
+    const dataRange = configSheet.getRange(`${column}2:${column}${lastRow}`);
     const values = dataRange.getValues();
 
     const result: string[] = [];
@@ -184,24 +172,102 @@ function readColumnFromCommentsTab(workbook: ExcelScript.Workbook, column: strin
 }
 
 async function main(workbook: ExcelScript.Workbook) {
-    // Get the active cell
-    const activeCell = workbook.getActiveCell();
-    const activeSheet = workbook.getActiveWorksheet();
+    // Check if Trace Config tab exists; if not, create it with the active cell as root
+    let configSheet = workbook.getWorksheet(CONFIG_TAB);
 
-    if (!activeCell) {
-        console.log("No active cell selected");
+    if (!configSheet) {
+        const activeCell = workbook.getActiveCell();
+        const activeSheet = workbook.getActiveWorksheet();
+
+        if (!activeCell) {
+            console.log("No active cell selected");
+            return;
+        }
+
+        // Create the Trace Config tab with the active cell as the initial root
+        configSheet = workbook.addWorksheet(CONFIG_TAB);
+        configSheet.getRange("A1").setValue("Cell");
+        configSheet.getRange("B1").setValue("Comment");
+
+        const headerRange = configSheet.getRange("A1:B1");
+        headerRange.getFormat().getFill().setColor("#4472C4");
+        headerRange.getFormat().getFont().setColor("white");
+        headerRange.getFormat().getFont().setBold(true);
+
+        // Populate A2 with the active cell reference
+        const addressRaw = activeCell.getAddress();
+        const sheetName = activeSheet.getName();
+        let cellPart = addressRaw;
+        const sheetRefMatch = addressRaw.match(/^(?:'[^']+'|[^!]+)!(.+)$/);
+        if (sheetRefMatch) {
+            cellPart = sheetRefMatch[1];
+        }
+        configSheet.getRange("A2").setValue(`'${sheetName}'!${cellPart}`);
+
+        configSheet.getRange("A:B").getFormat().autofitColumns();
+        configSheet.activate();
+        return; // Let the user populate the whitelist before running again
+    }
+
+    // Trace Config exists — read root cell from A2
+    const rootCellRef = String(configSheet.getRange("A2").getValue()).trim();
+
+    if (!rootCellRef) {
+        // A2 is empty — show error on output sheet
+        let traceSheet = workbook.getWorksheet("Formula Trace");
+        if (traceSheet) {
+            traceSheet.delete();
+        }
+        traceSheet = workbook.addWorksheet("Formula Trace");
+        traceSheet.getRange("A1").setValue("Error: Cell A2 in Trace Config is empty. Please specify a root cell reference.");
+        traceSheet.getRange("A1").getFormat().getFont().setBold(true);
+        traceSheet.getRange("A1").getFormat().getFont().setColor("#CC0000");
+        traceSheet.getRange("A:A").getFormat().autofitColumns();
+        traceSheet.activate();
         return;
     }
 
-    const activeCellAddress = activeCell.getAddress();
-    // console.log(`Tracing formula for cell: ${activeCellAddress}`);
+    // Parse the root cell reference (e.g., "'Sheet1'!A1" or "Sheet1!A1")
+    const rootMatch = rootCellRef.match(/^(?:'([^']+)'|([^!]+))!(.+)$/);
+    if (!rootMatch) {
+        let traceSheet = workbook.getWorksheet("Formula Trace");
+        if (traceSheet) {
+            traceSheet.delete();
+        }
+        traceSheet = workbook.addWorksheet("Formula Trace");
+        traceSheet.getRange("A1").setValue(`Error: Invalid cell reference in Trace Config A2: "${rootCellRef}". Expected format: 'Sheet Name'!A1`);
+        traceSheet.getRange("A1").getFormat().getFont().setBold(true);
+        traceSheet.getRange("A1").getFormat().getFont().setColor("#CC0000");
+        traceSheet.getRange("A:A").getFormat().autofitColumns();
+        traceSheet.activate();
+        return;
+    }
 
-    // Read filter lists from Comments tab
-    const followOnlyCells = readColumnFromCommentsTab(workbook, "C");
-    const stopTraceAtCells = readColumnFromCommentsTab(workbook, "D");
+    const rootSheetName = rootMatch[1] || rootMatch[2];
+    const rootAddress = rootMatch[3];
+
+    const rootSheet = workbook.getWorksheet(rootSheetName);
+    if (!rootSheet) {
+        let traceSheet = workbook.getWorksheet("Formula Trace");
+        if (traceSheet) {
+            traceSheet.delete();
+        }
+        traceSheet = workbook.addWorksheet("Formula Trace");
+        traceSheet.getRange("A1").setValue(`Error: Sheet "${rootSheetName}" not found. Check the reference in Trace Config A2.`);
+        traceSheet.getRange("A1").getFormat().getFont().setBold(true);
+        traceSheet.getRange("A1").getFormat().getFont().setColor("#CC0000");
+        traceSheet.getRange("A:A").getFormat().autofitColumns();
+        traceSheet.activate();
+        return;
+    }
+
+    const rootCell = rootSheet.getRange(rootAddress);
+
+    // Read whitelist from Column A of Trace Config
+    const whitelist = readColumnFromConfigTab(workbook, "A");
 
     // Build the trace tree
-    const traceTree = buildTraceTree(activeCell, activeSheet, 0, new Set(), workbook, followOnlyCells, stopTraceAtCells);
+    const traceTree = buildTraceTree(rootCell, rootSheet, 0, new Set(), workbook, whitelist);
 
     // Create or get the trace output sheet
     let traceSheet = workbook.getWorksheet("Formula Trace");
@@ -211,12 +277,11 @@ async function main(workbook: ExcelScript.Workbook) {
     traceSheet = workbook.addWorksheet("Formula Trace");
 
     // Write the trace to the new sheet
-    writeTraceToSheet(traceSheet, traceTree, activeCellAddress, workbook);
+    const rootDisplayAddress = `'${rootSheetName}'!${rootAddress}`;
+    writeTraceToSheet(traceSheet, traceTree, rootDisplayAddress, workbook);
 
     // Activate the trace sheet
     traceSheet.activate();
-
-    // console.log("Formula trace completed!");
 }
 
 /**
@@ -228,8 +293,7 @@ function buildTraceTree(
     level: number,
     visited: Set<string> = new Set(),
     workbook?: ExcelScript.Workbook,
-    followOnlyCells: string[] = [],
-    stopTraceAtCells: string[] = []
+    whitelist: string[] = []
 ): CellTrace {
     const addressRaw = cell.getAddress();
     const sheetName = sheet.getName();
@@ -265,17 +329,10 @@ function buildTraceTree(
         numberFormat: numberFormat
     };
 
-    // Check filtering rules (skip for root cell at level 0)
+    // Check whitelist (skip for root cell at level 0)
     const normalizedFullAddress = normalizeCellReference(fullAddress);
     if (level > 0) {
-        // Include In Trace: if configured, only trace cells that match this list
-        if (followOnlyCells.length > 0 && !cellMatchesList(normalizedFullAddress, followOnlyCells)) {
-            trace.isExcluded = true;
-            return trace;
-        }
-
-        // Exclude From Trace: stop tracing cells that match this list
-        if (cellMatchesList(normalizedFullAddress, stopTraceAtCells)) {
+        if (!cellMatchesList(normalizedFullAddress, whitelist)) {
             trace.isExcluded = true;
             return trace;
         }
@@ -333,8 +390,7 @@ function buildTraceTree(
                             level + 1,
                             new Set(visited), // Pass a copy to avoid shared state across branches
                             workbook,
-                            followOnlyCells,
-                            stopTraceAtCells
+                            whitelist
                         );
                         trace.precedents.push(precedentTrace);
                     } else {
@@ -588,32 +644,6 @@ function writeTraceToSheet(
     rootAddress: string,
     workbook: ExcelScript.Workbook
 ) {
-    // Create comments tab if specified but doesn't exist
-    const hasComments = COMMENTS_TAB.trim() !== "";
-    if (hasComments) {
-        let commentsSheet: ExcelScript.Worksheet | undefined = workbook.getWorksheet(COMMENTS_TAB);
-
-        if (!commentsSheet) {
-            // Create the comments sheet
-            commentsSheet = workbook.addWorksheet(COMMENTS_TAB);
-
-            // Add headers
-            commentsSheet.getRange("A1").setValue("Cell");
-            commentsSheet.getRange("B1").setValue("Comment");
-            commentsSheet.getRange("C1").setValue("Include In Trace");
-            commentsSheet.getRange("D1").setValue("Exclude From Trace");
-
-            // Format headers
-            const commentHeaderRange: ExcelScript.Range = commentsSheet.getRange("A1:D1");
-            commentHeaderRange.getFormat().getFill().setColor("#4472C4");
-            commentHeaderRange.getFormat().getFont().setColor("white");
-            commentHeaderRange.getFormat().getFont().setBold(true);
-
-            // Auto-fit columns
-            commentsSheet.getRange("A:D").getFormat().autofitColumns();
-        }
-    }
-
     // Set up headers
     sheet.getRange("A1").setValue("Level");
     sheet.getRange("B1").setValue("Sheet");
@@ -621,12 +651,9 @@ function writeTraceToSheet(
     sheet.getRange("D1").setValue("Status");
     sheet.getRange("E1").setValue("Formula");
     sheet.getRange("F1").setValue("Value");
+    sheet.getRange("G1").setValue("Comments");
 
-    // Add Comments column if COMMENTS_TAB is specified
-    const lastColumn = hasComments ? "G" : "F";
-    if (hasComments) {
-        sheet.getRange("G1").setValue("Comments");
-    }
+    const lastColumn = "G";
 
     // Format headers
     const headerRange = sheet.getRange(`A1:${lastColumn}1`);
@@ -645,8 +672,7 @@ function writeTraceToSheet(
     currentRow = writeTraceNode(sheet, trace, currentRow, "");
 
     // Auto-fit columns
-    const columnRange = hasComments ? "A:G" : "A:F";
-    sheet.getRange(columnRange).getFormat().autofitColumns();
+    sheet.getRange("A:G").getFormat().autofitColumns();
 }
 
 /**
@@ -658,11 +684,6 @@ function writeTraceNode(
     row: number,
     indent: string
 ): number {
-    // Skip excluded cells entirely if HIDE_EXCLUDED_CELLS is enabled
-    if (HIDE_EXCLUDED_CELLS && trace.isExcluded) {
-        return row;
-    }
-
     // Use simple indentation (2 spaces per level)
     const displayIndent = "  ".repeat(trace.level);
 
@@ -685,7 +706,7 @@ function writeTraceNode(
     } else if (trace.maxDepthReached) {
         statusText = "[max depth reached]";
     } else if (trace.isExcluded) {
-        statusText = "[not followed]";
+        statusText = "[not in scope]";
     } else if (trace.isRangeTooLarge) {
         statusText = "[range limit exceeded]";
     }
@@ -702,15 +723,12 @@ function writeTraceNode(
         valueCell.setNumberFormat(trace.numberFormat);
     }
 
-    // Add comment lookup formula if COMMENTS_TAB is specified
-    const hasComments = COMMENTS_TAB.trim() !== "";
-    if (hasComments) {
-        const commentFormula = `=LET(comment, IFERROR(OFFSET('${COMMENTS_TAB}'!$B$1, MATCH(TRIM(C${row}), '${COMMENTS_TAB}'!A:A, 0)-1, 0), ""), IF(AND(comment<>"", comment<>0), comment, ""))`;
-        sheet.getRange(`G${row}`).setFormula(commentFormula);
-    }
+    // Add comment lookup formula from Trace Config tab
+    const commentFormula = `=LET(comment, IFERROR(OFFSET('${CONFIG_TAB}'!$B$1, MATCH(TRIM(C${row}), '${CONFIG_TAB}'!A:A, 0)-1, 0), ""), IF(AND(comment<>"", comment<>0), comment, ""))`;
+    sheet.getRange(`G${row}`).setFormula(commentFormula);
 
-    // Color code by level, use special colors for circular references, max depth, excluded cells, and range limit exceeded
-    const lastCol = hasComments ? "G" : "F";
+    // Color code by level, use special colors for circular references, max depth, not-in-scope cells, and range limit exceeded
+    const lastCol = "G";
     if (trace.isCircularRef) {
         sheet.getRange(`A${row}:${lastCol}${row}`).getFormat().getFill().setColor("#FFE5E5"); // Light red
         sheet.getRange(`D${row}`).getFormat().getFont().setItalic(true);
