@@ -75,6 +75,10 @@ When `COMMENTS_TAB` is set, the script looks for (or creates) a sheet with this 
 - Does not handle named ranges or structured references (`Table1[Column]`)
 - Does not handle external workbook references (`[Book1]Sheet1!A1`)
 
+## Credits
+
+This project was vibe coded with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Claude Opus), Anthropic's AI-powered coding agent. From architecture to implementation — every line of code, this README, and even the commit messages were authored by Claude.
+
 ## License
 
 MIT
