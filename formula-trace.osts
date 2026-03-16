@@ -92,10 +92,14 @@ interface CellTrace {
 /**
  * Normalizes a cell reference by removing quotes around sheet names and $ signs from addresses
  * Converts 'Sheet Name'!$A$1 to Sheet Name!A1 for consistent comparison
+ * Also handles Excel's quote-stripping: Nat Gas'!E75 (leading quote consumed) -> Nat Gas!E75
  */
 function normalizeCellReference(ref: string): string {
-    // Remove leading and trailing quotes from sheet name if present
+    // Remove leading and trailing quotes from sheet name if present (e.g., 'Sheet Name'!A1)
     let normalized = ref.replace(/^'([^']+)'!/, '$1!');
+    // Handle Excel's quote-stripping: if leading ' was consumed, remove trailing ' before !
+    // e.g., "Nat Gas'!E75" -> "Nat Gas!E75"
+    normalized = normalized.replace(/^([^!']+)'!/, '$1!');
     // Remove $ signs from cell addresses (e.g., $E$75 becomes E75)
     normalized = normalized.replace(/\$/g, '');
     return normalized;
@@ -202,7 +206,8 @@ async function main(workbook: ExcelScript.Workbook) {
         if (sheetRefMatch) {
             cellPart = sheetRefMatch[1];
         }
-        configSheet.getRange("A2").setValue(`'${sheetName}'!${cellPart}`);
+        // Prefix with '' so Excel preserves the leading quote (Excel treats a single leading ' as a text indicator and strips it)
+        configSheet.getRange("A2").setValue(`''${sheetName}'!${cellPart}`);
 
         configSheet.getRange("A:B").getFormat().autofitColumns();
         configSheet.activate();
@@ -228,7 +233,9 @@ async function main(workbook: ExcelScript.Workbook) {
     }
 
     // Parse the root cell reference (e.g., "'Sheet1'!A1" or "Sheet1!A1")
-    const rootMatch = rootCellRef.match(/^(?:'([^']+)'|([^!]+))!(.+)$/);
+    // Also handle Excel's quote-stripping: if user types 'Nat Gas'!E75, Excel returns Nat Gas'!E75
+    // In that case, the trailing quote before ! is part of the sheet name quoting, not the actual name
+    const rootMatch = rootCellRef.match(/^(?:'([^']+)'|([^!']+)'?)!(.+)$/);
     if (!rootMatch) {
         let traceSheet = workbook.getWorksheet("Formula Trace");
         if (traceSheet) {
