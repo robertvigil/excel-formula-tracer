@@ -11,6 +11,7 @@ Excel's built-in **Trace Precedents** draws arrows for one level at a time and d
 ## Features
 
 - **Whitelist-based tracing** — only cells listed in the "Trace Config" tab are followed; everything else appears as `[not in scope]`
+- **Leaf cells** — mark cells with a "Leaf" flag (Column C) to show them in the output without tracing their precedents, reducing noise
 - **Recursive tracing** — follows dependencies up to a configurable depth (`MAX_TRACE_DEPTH`)
 - **Cross-sheet support** — resolves references like `Sheet2!A1` and `'OH Rates Calc'!E75`
 - **Range expansion** — expands `P17:P19` into individual cells (P17, P18, P19)
@@ -18,7 +19,7 @@ Excel's built-in **Trace Precedents** draws arrows for one level at a time and d
 - **Circular reference detection** — marks already-visited cells with `[already traced above]`
 - **Comments integration** — Column B of Trace Config provides optional annotations per cell (single cell references only, not ranges)
 - **Preserves formatting** — numeric formats from source cells carry over to the trace output
-- **Color-coded output** — each depth level gets a distinct background color; special colors for circular refs, max depth, not-in-scope cells, and oversized ranges
+- **Color-coded output** — each depth level gets a distinct background color; special colors for circular refs, max depth, not-in-scope cells, leaf cells, and oversized ranges
 
 ## Output
 
@@ -29,7 +30,7 @@ The script creates a **Formula Trace** sheet with these columns:
 | Level | Depth in the dependency tree (0 = root cell) |
 | Sheet | Sheet name where the cell lives |
 | Cell | Cell address with indentation showing hierarchy |
-| Status | Indicators: `[already traced above]`, `[max depth reached]`, `[not in scope]`, `[range limit exceeded]` |
+| Status | Indicators: `[already traced above]`, `[max depth reached]`, `[not in scope]`, `[leaf]`, `[range limit exceeded]` |
 | Formula | Formula text (displayed as-is, not executed) |
 | Value | Current cell value (preserves source number format) |
 | Comments | Lookup formula fetching comments from the Trace Config tab |
@@ -43,7 +44,8 @@ The script creates a **Formula Trace** sheet with these columns:
 5. A **Trace Config** tab is created with your selected cell as the root (A2)
 6. Populate Column A with additional cells/ranges to include in the trace scope
 7. Optionally add comments in Column B for single cell references
-8. Run the script again to generate the **Formula Trace** sheet
+8. Optionally mark cells as "Leaf" in Column C (any value, e.g., "x") to skip tracing their precedents
+9. Run the script again to generate the **Formula Trace** sheet
 
 ## Configuration
 
@@ -59,14 +61,15 @@ const CONFIG_TAB = "Trace Config"; // Name of the configuration tab
 
 The script uses a "Trace Config" tab with this layout:
 
-| A (Cell) | B (Comment) |
-|----------|-------------|
-| `'Sheet1'!A1` | Rate source |
-| `'Sheet1'!B5:B20` | |
-| `'Sheet2'!C3` | Updated quarterly |
+| A (Cell) | B (Comment) | C (Leaf) |
+|----------|-------------|----------|
+| `'Sheet1'!A1` | Rate source | |
+| `'Sheet1'!B5:B20` | | |
+| `'Sheet2'!C3` | Updated quarterly | x |
 
 - **Column A (Cell)** — whitelist of cells/ranges to trace. Supports individual cells (`'Sheet1'!A1`) and ranges (`'Sheet Name'!E73:E85`). **A2 is always the root cell** (starting point for the trace).
 - **Column B (Comment)** — optional annotations. Comments only apply to single cell references; comments on range entries are disregarded since they can't map to a single row in the output.
+- **Column C (Leaf)** — any non-empty value (e.g., "x") marks the cell as a leaf: it appears in the trace output with its formula and value, but its precedents are not traced further. Useful for reducing noise on branches you don't need to explore.
 
 If the Trace Config tab doesn't exist when you run the script, it's created automatically with the active cell as A2.
 
