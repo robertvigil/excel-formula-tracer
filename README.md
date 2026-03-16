@@ -19,7 +19,7 @@ Excel's built-in **Trace Precedents** draws arrows for one level at a time and d
 - **Circular reference detection** — marks already-visited cells with `[already traced above]`
 - **Comments integration** — Column B of Trace Config provides optional annotations per cell (single cell references only, not ranges)
 - **Preserves formatting** — numeric formats from source cells carry over to the trace output
-- **Color-coded output** — each depth level gets a distinct background color; special colors for circular refs, max depth, not-in-scope cells, leaf cells, and oversized ranges
+- **Color-coded output** — each depth level gets a distinct background color; special colors for circular refs, max depth, not-in-scope cells, and oversized ranges
 
 ## Output
 
